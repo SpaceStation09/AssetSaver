@@ -27,9 +27,9 @@ export class TransferETH {
 
   async getSponsoredTransactions(): Promise<providers.TransactionRequest[]> {
     const balance = await this._provider.getBalance(this._sender);
-    if(balance.eq(0)){
-      throw new Error(`No token balance: ${this._sender} doesn't have remaining native token`);
-    }
+    // if(balance.eq(0)){
+    //   throw new Error(`No balance: ${this._sender} doesn't have remaining native token`);
+    // }
 
     return [{
       to: this._recipient,
