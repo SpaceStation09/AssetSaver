@@ -1,6 +1,6 @@
-import { config as envConfig } from "dotenv";
+import { config as envConfig, parse } from "dotenv";
 import { resolve } from "path";
-import { BigNumber, Wallet, ethers } from "ethers";
+import { BigNumber, Wallet, ethers, providers } from "ethers";
 import {
   FlashbotsBundleProvider,
   FlashbotsBundleRawTransaction,
@@ -8,17 +8,21 @@ import {
   FlashbotsBundleTransaction,
 } from "@flashbots/ethers-provider-bundle";
 import { formatUnits, parseUnits } from "ethers/lib/utils";
-import { checkSimulation, printTransactions } from "../utils";
+import { GasResult, Result, checkSimulation, printTransactions } from "../utils";
+import "axios";
+import axios from "axios";
 require("log-timestamp");
 
 envConfig({ path: resolve(__dirname, "..", "..", ".env") });
 const ALCHEMY_API_KEY_GOERLI = process.env.ALCHEMY_API_KEY_GOERLI ?? "";
+const ALCHEMY_API_KEY_MAINNET = process.env.ALCHEMY_API_KEY_MAINNET ?? "";
 const PRIVATE_KEY_EXECUTOR = process.env.PRIVATE_KEY_EXECUTOR ?? "";
 const PRIVATE_KEY_SPONSOR = process.env.PRIVATE_KEY_SPONSOR ?? "";
 const RECIPIENT = process.env.RECIPIENT ?? "";
+const GAS_TRACKER_API_KEY = process.env.GAS_TRACKER_API_KEY ?? "";
 
 // TODO: use a gas price api to get more precise & appropriate value
-const PRIORITY_GAS_PRICE = parseUnits("100", "gwei");
+let PRIORITY_GAS_PRICE = parseUnits("50", "gwei");
 const BLOCKS_IN_FUTURE = 2;
 
 if (PRIVATE_KEY_EXECUTOR === "") {
@@ -45,16 +49,14 @@ async function main() {
   const authSigner = Wallet.createRandom();
   const sponsor = new Wallet(PRIVATE_KEY_SPONSOR);
   const executor = new Wallet(PRIVATE_KEY_EXECUTOR);
-
-  const provider = new ethers.providers.AlchemyProvider(
-    "goerli",
-    ALCHEMY_API_KEY_GOERLI
-  );
-  const flashbotsProvider = await FlashbotsBundleProvider.create(
-    provider,
-    authSigner,
-    "https://relay-goerli.flashbots.net"
-  );
+  let provider: providers.AlchemyProvider;
+  let flashbotsURL: string;
+  let chainId = 5;
+  let gasOracle: GasResult = {
+    SafeGasPrice: parseUnits("20", "gwei"),
+    ProposeGasPrice: parseUnits("30", "gwei"),
+    FastGasPrice: parseUnits("40", "gwei"),
+  }
 
   // TODO: Pretty output
   console.log("==============================================");
@@ -63,6 +65,46 @@ async function main() {
   );
   console.log(`Executor Account: ${executor.address}`);
   console.log(`Sponsor Account: ${sponsor.address}`);
+
+  if (ALCHEMY_API_KEY_MAINNET) {
+    chainId = 1;
+    provider = new ethers.providers.AlchemyProvider(
+      "mainnet",
+      ALCHEMY_API_KEY_MAINNET
+    );
+    flashbotsURL = "https://relay.flashbots.net";
+    console.log("!!!!!TASK ON MAINNET!!!!!");
+
+    if (GAS_TRACKER_API_KEY){
+      const {data, status} = await axios.get<Result>(
+        `https://api.etherscan.io/api?module=gastracker&action=gasoracle&apikey=${GAS_TRACKER_API_KEY}`
+      );
+
+      if(status == 200){
+        const result = data.result;
+        gasOracle = {
+          SafeGasPrice: parseUnits(result.SafeGasPrice, "gwei"),
+          ProposeGasPrice: parseUnits(result.ProposeGasPrice, "gwei"),
+          FastGasPrice: parseUnits(result.FastGasPrice, "gwei"),
+        };
+      }
+    }
+  } else {
+    provider = new ethers.providers.AlchemyProvider(
+      "goerli",
+      ALCHEMY_API_KEY_GOERLI
+    );
+    flashbotsURL = "https://relay-goerli.flashbots.net";
+    console.log("TASK ON GOERLI");
+  }
+  PRIORITY_GAS_PRICE = gasOracle.FastGasPrice.mul(2);
+  console.log("Our Priority Gas is: ", PRIORITY_GAS_PRICE.toString());
+
+  const flashbotsProvider = await FlashbotsBundleProvider.create(
+    provider,
+    authSigner,
+    flashbotsURL
+  );
 
   provider.on("block", async (blockNumber) => {
     const block = await provider.getBlock("latest");
@@ -91,7 +133,7 @@ async function main() {
           transaction: {
             to: executor.address,
             type: 2,
-            chainId: 5,
+            chainId,
             maxFeePerGas: PRIORITY_GAS_PRICE.add(maxBaseFeeInFutureBlock),
             maxPriorityFeePerGas: PRIORITY_GAS_PRICE,
             gasLimit: 21000,
@@ -103,7 +145,7 @@ async function main() {
           transaction: {
             ...sponsoredTx,
             type: 2,
-            chainId: 5,
+            chainId,
             maxFeePerGas: PRIORITY_GAS_PRICE.add(maxBaseFeeInFutureBlock),
             maxPriorityFeePerGas: PRIORITY_GAS_PRICE,
             gasLimit: gasEstimated,
@@ -137,9 +179,7 @@ async function main() {
 
       const bundleResolution = await bundleResponse.wait();
       if (bundleResolution === FlashbotsBundleResolution.BundleIncluded) {
-        console.log(
-          `Congrats, included in ${targetBlockNumber}`
-        );
+        console.log(`Congrats, included in ${targetBlockNumber}`);
         process.exit(0);
       } else if (
         bundleResolution ===

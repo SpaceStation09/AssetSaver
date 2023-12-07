@@ -80,3 +80,23 @@ export async function printTransactions(
 
   console.log("--------------------------------");
 }
+
+
+export interface Result {
+  status: string;
+  message: string;
+  result: {
+    LastBlock: string;
+    SafeGasPrice: string;
+    ProposeGasPrice: string;
+    FastGasPrice: string;
+    suggestBaseFee: string;
+    gasUsedRatio: string;
+  };
+}
+
+export interface GasResult {
+  SafeGasPrice: BigNumber;
+  ProposeGasPrice: BigNumber;
+  FastGasPrice: BigNumber;
+}
